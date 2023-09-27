@@ -1,16 +1,20 @@
+import json
 import os
+import sys
 import threading
+import time
 
 from flask import Flask, request
 from flask_cors import CORS
 
-import agent_status
 import system
 from fileparser import FileParser
 import requests
 import subprocess
 import webbrowser
+import pyautogui
 
+from status import Status, ErrorCode, AgentStatus
 from storage import Storage
 from requests.auth import HTTPBasicAuth
 
@@ -19,11 +23,16 @@ CORS(app)
 parser = FileParser()
 storage = Storage()
 
-API_BASE_URL = 'https://hsrapi.teheidoma.com'
-APP_BASE_URL = 'http://localhost:4200'
-# APP_BASE_URL = 'https://hsr.teheidoma.com'
+debug = True
+APP_VERSION = '0.1.1'
+status: Status = Status()
 
-honkai_token = None
+if debug:
+    API_BASE_URL = 'http://localhost:8080'
+    APP_BASE_URL = 'http://localhost:4200'
+else:
+    API_BASE_URL = 'https://hsrapi.teheidoma.com'
+    APP_BASE_URL = 'https://hsr.teheidoma.com'
 
 
 @app.route("/token", methods=['POST'])
@@ -37,27 +46,72 @@ def install():
     return '{"status":"OK"}'
 
 
+def get_agent_update_url():
+    resp = requests.get(API_BASE_URL + '/agent/info',
+                        auth=requests.auth.HTTPBasicAuth(storage.get_value('id'), storage.get_value('token')),
+                        verify=False)
+    return resp.json()
+
+
 @app.route("/status", methods=['GET'])
-def status():
-    global honkai_token
-    status = agent_status.AgentStatus.IDLE
+def get_status():
+    print(status.to_response())
+    return status.to_response()
 
-    if honkai_token == b'':
-        status = agent_status.AgentStatus.TOKEN_ERROR
-    elif system.is_game_running():
-        status = agent_status.AgentStatus.GAME_RUNNING
 
-    return {'status': status.value}
+def exec_cmd(command):
+    os.system('chcp 65001')
+    run = subprocess.check_output('cmd /c ' + command['command'], encoding='utf-8', text=True)
+    print(sys.stdout.encoding)
+    with open('f.txt', 'w', encoding='utf-8') as f:
+        f.write(run)
+        f.close()
+    return run
+
+
+def agent_send_response(command, result):
+    requests.post(API_BASE_URL + '/agent/result',
+                  headers={
+                      'Content-Type': 'application/json;charset=utf-8'
+                  },
+                  json={'id': command['id'], 'result': result},
+                  auth=requests.auth.HTTPBasicAuth(storage.get_value('id'), storage.get_value('token')),
+                  verify=False)
+
+
+def screenshot(command):
+    filename = f'{command["id"]}.png'
+    pyautogui.screenshot(filename)
+    with open(filename, 'rb') as f:
+        print(requests.put(command['command'], data=f.read()))
+    return 'https://hsr.teheidoma.com:9000/screenshot/' + filename
 
 
 def pull_agent_commands():
-    requests.get(API_BASE_URL + '/agent', verify=False)
+    while True:
+        if storage.has_value('id'):
+            resp = requests.get(API_BASE_URL + '/agent/commands',
+                                auth=requests.auth.HTTPBasicAuth(storage.get_value('id'), storage.get_value('token')),
+                                verify=False)
+            for command in resp.json():
+                print(command)
+                print(command['type'])
+                result = ''
+                if command['type'] == 'CMD':
+                    result = exec_cmd(command)
+                if command['type'] == 'SCREENSHOT':
+                    result = screenshot(command)
+                agent_send_response(command, result)
+        time.sleep(2)
 
 
 def link_device():
     auth_token = get_honkai_token()
-    print(requests.post(API_BASE_URL + '/registration/link', json={"token": auth_token},
-                        auth=requests.auth.HTTPBasicAuth(storage.get_value('id'), storage.get_value('token')),verify=False))
+    if auth_token:
+        requests.post(API_BASE_URL + '/registration/link', json={"token": auth_token},
+                      auth=requests.auth.HTTPBasicAuth(storage.get_value('id'), storage.get_value('token')),
+                      verify=False)
+        status.status(AgentStatus.IMPORT)
 
 
 def init_reg():
@@ -66,25 +120,29 @@ def init_reg():
 
 
 def get_honkai_token():
-    global honkai_token
+    status.clear()
     req = requests.get(API_BASE_URL + '/agent/pull',
-                       auth=requests.auth.HTTPBasicAuth(storage.get_value('id'), storage.get_value('token')), verify=False).text
+                       auth=requests.auth.HTTPBasicAuth(storage.get_value('id'), storage.get_value('token')),
+                       verify=False).text
     print(req)
     with open('temp.ps1', 'w') as temp_file:
         temp_file.write(req)
         temp_file.flush()
     run = subprocess.run('powershell ./temp.ps1', capture_output='stdout')
-    url = run.stdout
-    honkai_token = url
     os.remove('temp.ps1')
-    auth_key = next(filter(lambda f: f[0] == 'authkey', map(lambda x: x.split("="), list(str(url).split("&")))))[1]
-    return auth_key
+    print(run.stdout)
+    resp = json.loads(run.stdout)
+    print(resp)
+    if resp['status'] == 'SUCCESS':
+        auth_key = \
+        next(filter(lambda f: f[0] == 'authkey', map(lambda x: x.split("="), list(str(resp['token']).split("&")))))[1]
+        return auth_key
+    else:
+        status.error(resp['code'])
+        return None
 
 
-if __name__ == '__main__':
-    init_reg()
-    app.run(port=25565)
-    # t = threading.Thread(target=test)
-    # t.start()
-
+t = threading.Thread(target=pull_agent_commands, daemon=True)
+t.start()
 init_reg()
+app.run(port=25565, host='0.0.0.0')
