@@ -1,11 +1,12 @@
 import json
+import logging
 import os
 import sys
 import threading
 import time
 
 from flask import Flask, request
-from flask_cors import CORS
+from flask_cors import CORS, cross_origin
 
 import system
 from fileparser import FileParser
@@ -14,7 +15,6 @@ import subprocess
 import webbrowser
 import pyautogui
 
-from status import Status, ErrorCode, AgentStatus
 from storage import Storage
 from requests.auth import HTTPBasicAuth
 
@@ -25,7 +25,6 @@ storage = Storage()
 
 debug = True
 APP_VERSION = '0.1.1'
-status: Status = Status()
 
 if debug:
     API_BASE_URL = 'http://localhost:8080'
@@ -42,8 +41,7 @@ def install():
     storage.set_value('id', request.json['id'])
     storage.save()
 
-    link_device()
-    return '{"status":"OK"}'
+    return get_honkai_token()
 
 
 def get_agent_update_url():
@@ -51,12 +49,6 @@ def get_agent_update_url():
                         auth=requests.auth.HTTPBasicAuth(storage.get_value('id'), storage.get_value('token')),
                         verify=False)
     return resp.json()
-
-
-@app.route("/status", methods=['GET'])
-def get_status():
-    print(status.to_response())
-    return status.to_response()
 
 
 def exec_cmd(command):
@@ -90,59 +82,45 @@ def screenshot(command):
 def pull_agent_commands():
     while True:
         if storage.has_value('id'):
-            resp = requests.get(API_BASE_URL + '/agent/commands',
-                                auth=requests.auth.HTTPBasicAuth(storage.get_value('id'), storage.get_value('token')),
-                                verify=False)
+            try:
+                resp = requests.get(API_BASE_URL + '/agent/commands',
+                                    auth=requests.auth.HTTPBasicAuth(storage.get_value('id'),
+                                                                     storage.get_value('token')),
+                                    verify=False)
+            except Exception as e:
+                print(e)
+                break
             for command in resp.json():
-                print(command)
-                print(command['type'])
-                result = ''
-                if command['type'] == 'CMD':
-                    result = exec_cmd(command)
-                if command['type'] == 'SCREENSHOT':
-                    result = screenshot(command)
-                agent_send_response(command, result)
+                try:
+                    print(command)
+                    print(command['type'])
+                    result = ''
+                    if command['type'] == 'CMD':
+                        result = exec_cmd(command)
+                    if command['type'] == 'SCREENSHOT':
+                        result = screenshot(command)
+                    agent_send_response(command, result)
+                except Exception as e:
+                    agent_send_response(command, e.__str__())
+
         time.sleep(2)
 
 
-def link_device():
-    auth_token = get_honkai_token()
-    if auth_token:
-        requests.post(API_BASE_URL + '/registration/link', json={"token": auth_token},
-                      auth=requests.auth.HTTPBasicAuth(storage.get_value('id'), storage.get_value('token')),
-                      verify=False)
-        status.status(AgentStatus.IMPORT)
-
-
-def init_reg():
-    if not storage.has_value('token'):
-        webbrowser.open(APP_BASE_URL + '/registration/token')
-
-
 def get_honkai_token():
-    status.clear()
     req = requests.get(API_BASE_URL + '/agent/pull',
                        auth=requests.auth.HTTPBasicAuth(storage.get_value('id'), storage.get_value('token')),
                        verify=False).text
-    print(req)
     with open('temp.ps1', 'w') as temp_file:
         temp_file.write(req)
         temp_file.flush()
     run = subprocess.run('powershell ./temp.ps1', capture_output='stdout')
     os.remove('temp.ps1')
-    print(run.stdout)
+
     resp = json.loads(run.stdout)
-    print(resp)
-    if resp['status'] == 'SUCCESS':
-        auth_key = \
-        next(filter(lambda f: f[0] == 'authkey', map(lambda x: x.split("="), list(str(resp['token']).split("&")))))[1]
-        return auth_key
-    else:
-        status.error(resp['code'])
-        return None
+    return resp
 
 
 t = threading.Thread(target=pull_agent_commands, daemon=True)
 t.start()
-init_reg()
 app.run(port=25565, host='0.0.0.0')
+print(123)
