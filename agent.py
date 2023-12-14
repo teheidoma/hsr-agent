@@ -1,22 +1,18 @@
 import json
-import logging
 import os
+import subprocess
 import sys
 import threading
 import time
 
-from flask import Flask, request
-from flask_cors import CORS, cross_origin
-
-import system
-from fileparser import FileParser
-import requests
-import subprocess
-import webbrowser
 import pyautogui
-
-from storage import Storage
+import requests
+from flask import Flask, request
+from flask_cors import CORS
 from requests.auth import HTTPBasicAuth
+
+from fileparser import FileParser
+from storage import Storage
 
 app = Flask(__name__)
 CORS(app)
