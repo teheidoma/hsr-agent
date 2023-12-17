@@ -12,16 +12,10 @@ from flask_cors import CORS
 from requests.auth import HTTPBasicAuth
 
 from fileparser import FileParser
+from logger import Logger
 from storage import Storage
 
-app = Flask(__name__)
-CORS(app)
-parser = FileParser()
-storage = Storage()
-
 debug = True
-APP_VERSION = '0.1.1'
-
 if debug:
     API_BASE_URL = 'http://localhost:8080'
     APP_BASE_URL = 'http://localhost:4200'
@@ -29,14 +23,22 @@ else:
     API_BASE_URL = 'https://hsrapi.teheidoma.com'
     APP_BASE_URL = 'https://hsr.teheidoma.com'
 
+app = Flask(__name__)
+CORS(app)
+parser = FileParser()
+storage = Storage()
+logger = Logger(API_BASE_URL, storage)
+
+APP_VERSION = '0.1.1'
+
 
 @app.route("/token", methods=['POST'])
 def install():
-    print(request.json)
     storage.set_value('token', request.json['token'])
     storage.set_value('id', request.json['id'])
     storage.save()
 
+    # return {'status': 'FAILED', 'code':'TOKEN_GAME_UPDATE'}
     return get_honkai_token()
 
 
@@ -50,7 +52,6 @@ def get_agent_update_url():
 def exec_cmd(command):
     os.system('chcp 65001')
     run = subprocess.check_output('cmd /c ' + command['command'], encoding='utf-8', text=True)
-    print(sys.stdout.encoding)
     with open('f.txt', 'w', encoding='utf-8') as f:
         f.write(run)
         f.close()
@@ -84,7 +85,7 @@ def pull_agent_commands():
                                                                      storage.get_value('token')),
                                     verify=False)
             except Exception as e:
-                print(e)
+                logger.log(e, level='ERROR')
                 break
             for command in resp.json():
                 try:
@@ -97,6 +98,7 @@ def pull_agent_commands():
                         result = screenshot(command)
                     agent_send_response(command, result)
                 except Exception as e:
+                    logger.log(e, level='ERROR')
                     agent_send_response(command, e.__str__())
 
         time.sleep(2)
@@ -118,5 +120,5 @@ def get_honkai_token():
 
 t = threading.Thread(target=pull_agent_commands, daemon=True)
 t.start()
+logger.log('started')
 app.run(port=25565, host='0.0.0.0')
-print(123)
