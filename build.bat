@@ -1,0 +1,1 @@
+pyinstaller -F --noconsole -i icon.jpg agent.py

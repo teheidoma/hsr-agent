@@ -4,18 +4,24 @@ import subprocess
 import sys
 import threading
 import time
+from multiprocessing import Process
+
+import pystray
 
 import pyautogui
 import requests
 from flask import Flask, request
 from flask_cors import CORS
 from requests.auth import HTTPBasicAuth
+from pystray import MenuItem as item
+from PIL import Image
+from werkzeug.serving import make_server
 
 from fileparser import FileParser
 from logger import Logger
 from storage import Storage
 
-debug = True
+debug = False
 if debug:
     API_BASE_URL = 'http://localhost:8080'
     APP_BASE_URL = 'http://localhost:4200'
@@ -29,7 +35,24 @@ parser = FileParser()
 storage = Storage()
 logger = Logger(API_BASE_URL, storage)
 
-APP_VERSION = '0.1.1'
+APP_VERSION = '0.2.3'
+
+server_thread = None
+
+
+class ServerThread(threading.Thread):
+    def __init__(self, app):
+        threading.Thread.__init__(self)
+        self.server = make_server('0.0.0.0', 25565, app)
+        self.ctx = app.app_context()
+        self.ctx.push()
+
+    def run(self):
+        logger.log('started server')
+        self.server.serve_forever()
+
+    def shutdown(self):
+        self.server.shutdown()
 
 
 @app.route("/token", methods=['POST'])
@@ -118,7 +141,28 @@ def get_honkai_token():
     return resp
 
 
-t = threading.Thread(target=pull_agent_commands, daemon=True)
-t.start()
-logger.log('started')
-app.run(port=25565, host='0.0.0.0')
+# Function to exit the application
+def exit_application(icon, item):
+    global server_thread
+    server_thread.shutdown()
+    icon.stop()
+    sys.exit(0)
+    # Add code here to clean up resources or perform any necessary actions before exiting
+
+
+# Create the icon
+def create_tray_icon():
+    image = Image.open("icon.jpg")  # Replace with the path to your icon image
+    menu = (item('Exit', exit_application),)
+    icon = pystray.Icon("MyApp", image, "My App", menu)
+    icon.run_detached()
+
+
+# Run the application
+if __name__ == "__main__":
+    create_tray_icon()
+    t = threading.Thread(target=pull_agent_commands, daemon=True)
+    t.start()
+    server_thread = ServerThread(app)
+    server_thread.start()
+

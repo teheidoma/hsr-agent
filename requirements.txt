@@ -3,3 +3,6 @@ flask-cors
 pyautogui~=0.9.54
 PyUpdater
 requests~=2.31.0
+pystray~=0.19.5
+Pillow~=10.0.0
+winregistry~=1.1.1
